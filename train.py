@@ -2,6 +2,7 @@
 
 import tensorflow as tf
 import numpy as np
+import pickle
 import os
 import time
 import datetime
@@ -18,7 +19,6 @@ tf.flags.DEFINE_string("positive_data_file", "./data/rt-polaritydata/rt-polarity
 tf.flags.DEFINE_string("negative_data_file", "./data/rt-polaritydata/rt-polarity.neg", "Data source for the positive data.")
 
 # Model Hyperparameters
-tf.flags.DEFINE_integer("embedding_dim", 128, "Dimensionality of character embedding (default: 128)")
 tf.flags.DEFINE_string("filter_sizes", "3,4,5", "Comma-separated filter sizes (default: '3,4,5')")
 tf.flags.DEFINE_integer("num_filters", 128, "Number of filters per filter size (default: 128)")
 tf.flags.DEFINE_float("dropout_keep_prob", 0.5, "Dropout keep probability (default: 0.5)")
@@ -41,17 +41,25 @@ for attr, value in sorted(FLAGS.__flags.items()):
 print("")
 
 
-# Data Preparatopn
-# ==================================================
+# # Data Preparatopn
+# # ==================================================
 
-# Load data
+embedding_vector_length = 300
+
+# # Load data
 print("Loading data...")
 x_text, y = data_helpers.load_data_and_labels(FLAGS.positive_data_file, FLAGS.negative_data_file)
+embedding_dict = pickle.load(open("embedding_dict.p", "rb"))
 
-# Build vocabulary
+# # Build vocabulary
 max_document_length = max([len(x.split(" ")) for x in x_text])
-vocab_processor = learn.preprocessing.VocabularyProcessor(max_document_length)
-x = np.array(list(vocab_processor.fit_transform(x_text)))
+# vocab_processor = learn.preprocessing.VocabularyProcessor(max_document_length)
+x = np.zeros([len(x_text), max_document_length, embedding_vector_length])
+for i, sent in enumerate(x_text):
+	for j, word in enumerate(sent.split(" ")):
+		x[i][j] = embedding_dict[word]
+
+
 
 # Randomly shuffle data
 np.random.seed(10)
@@ -64,8 +72,7 @@ y_shuffled = y[shuffle_indices]
 dev_sample_index = -1 * int(FLAGS.dev_sample_percentage * float(len(y)))
 x_train, x_dev = x_shuffled[:dev_sample_index], x_shuffled[dev_sample_index:]
 y_train, y_dev = y_shuffled[:dev_sample_index], y_shuffled[dev_sample_index:]
-print("Vocabulary Size: {:d}".format(len(vocab_processor.vocabulary_)))
-print("Train/Dev split: {:d}/{:d}".format(len(y_train), len(y_dev)))
+
 
 
 # Training
@@ -80,8 +87,8 @@ with tf.Graph().as_default():
         cnn = TextCNN(
             sequence_length=x_train.shape[1],
             num_classes=y_train.shape[1],
-            vocab_size=len(vocab_processor.vocabulary_),
-            embedding_size=FLAGS.embedding_dim,
+            vocab_size=len(embedding_dict),
+            embedding_size=embedding_vector_length,
             filter_sizes=list(map(int, FLAGS.filter_sizes.split(","))),
             num_filters=FLAGS.num_filters,
             l2_reg_lambda=FLAGS.l2_reg_lambda)
@@ -128,8 +135,7 @@ with tf.Graph().as_default():
             os.makedirs(checkpoint_dir)
         saver = tf.train.Saver(tf.all_variables())
 
-        # Write vocabulary
-        vocab_processor.save(os.path.join(out_dir, "vocab"))
+
 
         # Initialize all variables
         sess.run(tf.initialize_all_variables())
@@ -170,15 +176,19 @@ with tf.Graph().as_default():
         # Generate batches
         batches = data_helpers.batch_iter(
             list(zip(x_train, y_train)), FLAGS.batch_size, FLAGS.num_epochs)
+        batch_num_per_epoch = int(len(x_train) / FLAGS.batch_size) + 1
         # Training loop. For each batch...
         for batch in batches:
             x_batch, y_batch = zip(*batch)
             train_step(x_batch, y_batch)
             current_step = tf.train.global_step(sess, global_step)
-            if current_step % FLAGS.evaluate_every == 0:
+            if current_step % batch_num_per_epoch == 0:
+                epoch_num = int(current_step / batch_num_per_epoch)
+                print("\nEpoch:" + str(epoch_num))
                 print("\nEvaluation:")
                 dev_step(x_dev, y_dev, writer=dev_summary_writer)
                 print("")
-            if current_step % FLAGS.checkpoint_every == 0:
                 path = saver.save(sess, checkpoint_prefix, global_step=current_step)
                 print("Saved model checkpoint to {}\n".format(path))
+                if epoch_num == 30:
+                	break

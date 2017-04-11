@@ -1,5 +1,6 @@
 *.npy
 runs/
+embedding_dict.p
 
 # Created by https://www.gitignore.io/api/python,ipythonnotebook
 
